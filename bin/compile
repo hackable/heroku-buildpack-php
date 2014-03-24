@@ -58,10 +58,58 @@ cp $LP_DIR/conf/php.ini php
 mkdir -p bin
 ln -s /app/php/bin/php bin/php
 
+
+# set a slug_id identifier
+slug_id=$(php/bin/php -r "echo md5(uniqid('', TRUE));")
+echo $slug_id > SLUG_ID
+echo "Creating Slug Identifier file with id: ${slug_id}"
+
+# Determine if an SSH bundle including ssh keys etc is included so we can access private composer repos
+# Create your bundle with 
+# tar -czv .ssh | openssl enc -out ssh_bundle_enc -e -k $SSH_BUNDLE_PASSWORD -aes-128-cbc
+# the bundle's config should include directives for
+# StrictHostKeyChecking no
+# UserKnownHostsFile=/dev/null
+if [[ -n "$SSH_BUNDLE_URL" && -n "$SSH_BUNDLE_PASSWORD" ]]; then
+    cd ~
+    # download the bundle
+    curl --silent --max-time 60 --location "$SSH_BUNDLE_URL" -o ssh_bundle_enc
+    # decrypt the bundle
+    openssl enc -in ssh_bundle_enc -d -k $SSH_BUNDLE_PASSWORD -aes-128-cbc > ssh_bundle.tar.gz
+    # extract the bundle
+    tar -xzf ssh_bundle.tar.gz
+    # cleanup
+    rm ssh_bundle_enc
+    rm ssh_bundle.tar.gz
+    cd $BUILD_DIR
+fi
+
+echo "Installing Composer binary"
+curl -s https://getcomposer.org/installer | $BUILD_DIR/bin/php -- --install-dir=bin
+mv bin/composer.phar bin/composer
+
+if [ -f $BUILD_DIR/www/composer.json ]; then
+  echo "Installing Composer dependencies"
+  cd $BUILD_DIR/www
+  $BUILD_DIR/bin/php $BUILD_DIR/bin/composer config -g github-protocols https
+  $BUILD_DIR/bin/php $BUILD_DIR/bin/composer install --prefer-dist --no-dev --optimize-autoloader
+  cd $BUILD_DIR
+fi
+
+if [ -d ~/.ssh ]; then
+    rm -rf ~/.ssh
+fi
+
+if [ -d $BUILD_DIR/www/htaccess.template ]; then
+    mv $BUILD_DIR/www/htaccess.template $BUILD_DIR/www/.htaccess
+fi
+
+
 cat >>boot.sh <<EOF
 for var in \`env|cut -f1 -d=\`; do
   echo "PassEnv \$var" >> /app/apache/conf/httpd.conf;
 done
+chmod -R 777 /app/www
 touch /app/apache/logs/error_log
 touch /app/apache/logs/access_log
 tail -F /app/apache/logs/error_log &
